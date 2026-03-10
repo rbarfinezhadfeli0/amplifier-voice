@@ -114,16 +114,22 @@ async def exchange_realtime_sdp(offer_sdp: bytes, authorization: str) -> Dict[st
             SDP_EXCHANGE_ENDPOINT, content=offer_sdp, headers=headers
         )
 
-    if resp.status_code != 200:
+    if resp.status_code not in (200, 201):
         logger.error(f"SDP exchange failed: {resp.status_code} - {resp.text}")
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
     # GA API returns raw SDP
     sdp_content = resp.text
 
+    # Debug: log all response headers to find the call_id
+    logger.info(f"SDP exchange response status: {resp.status_code}")
+    logger.info(f"SDP exchange response headers: {dict(resp.headers)}")
+
     # Extract call_id from Location header: https://api.openai.com/v1/realtime/calls/{call_id}
     location = resp.headers.get("location", "")
     call_id = location.split("/")[-1] if location else ""
-    logger.info(f"SDP exchange successful, call_id: {call_id}")
+    logger.info(
+        f"SDP exchange successful, call_id: {call_id!r}, location: {location!r}"
+    )
 
     return {"sdp": sdp_content, "call_id": call_id}

@@ -137,8 +137,14 @@ class VoiceSideband:
             },
         }
 
-        await self._ws.send(json.dumps(item_create))
-        await self._ws.send(json.dumps(response_create))
+        try:
+            await self._ws.send(json.dumps(item_create))
+            await self._ws.send(json.dumps(response_create))
+            logger.info("Sideband delegate result injected for call_id=%s", call_id)
+        except Exception:
+            logger.exception(
+                "Sideband delegate result injection FAILED for call_id=%s", call_id
+            )
 
     async def _handle_dispatch(self, call_id: str, arguments: dict) -> None:
         """Send an immediate synthetic ack and spawn a background agent job."""
@@ -240,9 +246,11 @@ class VoiceSideband:
 
     async def send_session_update(self, session_config: dict) -> None:
         """Send a session.update message to the Realtime session."""
+        # GA API requires "type": "realtime" in every session.update
+        session_payload = {"type": "realtime", **session_config}
         msg = {
             "type": "session.update",
-            "session": session_config,
+            "session": session_payload,
         }
         await self._ws.send(json.dumps(msg))
 

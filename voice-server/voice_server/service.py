@@ -74,6 +74,7 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
         allow_origins=settings.service.allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Call-Id"],
     )
 
     @app.post("/session")
