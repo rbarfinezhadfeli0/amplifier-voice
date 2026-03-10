@@ -12,12 +12,6 @@ import { useTranscriptStore, SessionEndReason } from '../stores/transcriptStore'
 import { DisconnectReason } from '../lib/connectionHealth';
 import { voiceConfig } from '../config/voiceConfig';
 
-// Voice control tools that are handled client-side
-// Include both old and new names for backwards compatibility with cached sessions
-const CLIENT_SIDE_TOOLS = new Set([
-    'pause_replies', 'resume_replies',           // New names
-    'enter_listen_mode', 'exit_listen_mode',     // Old names (for cached sessions)
-]);
 
 export const useVoiceChat = () => {
     const { 
@@ -67,9 +61,6 @@ export const useVoiceChat = () => {
 
     // Track data channel for microphone control
     const dataChannelRef = useRef<RTCDataChannel | null>(null);
-
-    // Track pending tool acknowledgments - need to send response.create after response.done
-    const pendingToolAckRef = useRef<boolean>(false);
 
     // Helper to trigger a response via data channel (for voice keyword handlers)
     const triggerResponseViaDataChannel = useCallback(() => {
@@ -198,76 +189,6 @@ export const useVoiceChat = () => {
         },
     }), [health]);
 
-    // Handle voice control tool calls (client-side execution)
-    const handleVoiceControlTool = useCallback((
-        toolName: string,
-        callId: string,
-        dataChannel: RTCDataChannel
-    ): boolean => {
-        if (!CLIENT_SIDE_TOOLS.has(toolName)) {
-            return false; // Not a client-side tool
-        }
-
-        console.log(`[VoiceChat] Handling client-side tool: ${toolName}`);
-
-        // Normalize tool name for consistent handling
-        const isPause = toolName === 'pause_replies' || toolName === 'enter_listen_mode';
-        const isResume = toolName === 'resume_replies' || toolName === 'exit_listen_mode';
-
-        // Execute the appropriate action (only show indicator if state actually changes)
-        // Track if state changed - if not, voice keyword already handled it
-        let stateChanged = false;
-        
-        if (isPause) {
-            const wasNotPaused = micControl.micState !== 'paused';
-            micControl.pauseReplies();
-            if (wasNotPaused) {
-                addSystemMessage('Replies paused - still listening', '⏸️');
-                stateChanged = true;
-            }
-        } else if (isResume) {
-            const wasPaused = micControl.micState === 'paused';
-            micControl.resumeReplies();
-            if (wasPaused) {
-                addSystemMessage('Replies resumed', '▶️');
-                stateChanged = true;
-            }
-        } else {
-            console.warn(`[VoiceChat] Unknown client-side tool: ${toolName}`);
-            return false;
-        }
-
-        // Send tool result back to OpenAI so the model knows it succeeded
-        // Note: Do NOT send response.create here - the model is already in an active response
-        // (it called this tool as part of responding). Sending response.create would cause
-        // "conversation_already_has_active_response" error. The model will naturally continue
-        // after receiving the tool result.
-        if (callId && dataChannel.readyState === 'open') {
-            const resultMessage = isPause 
-                ? 'Replies paused. I am still listening and will transcribe what you say. Say "go ahead" or "respond now" when you want me to reply.'
-                : 'Replies resumed. I will now respond to your speech normally.';
-            
-            // Send the function call output
-            const toolResult = {
-                type: 'conversation.item.create',
-                item: {
-                    type: 'function_call_output',
-                    call_id: callId,
-                    output: JSON.stringify({ success: true, message: resultMessage })
-                }
-            };
-            dataChannel.send(JSON.stringify(toolResult));
-            console.log(`[VoiceChat] Sent tool result for ${toolName}`);
-
-            // Mark that we need to trigger a response after this response.done
-            // Can't send response.create now (active response), but need model to acknowledge
-            pendingToolAckRef.current = true;
-            console.log(`[VoiceChat] Marked pending tool ack for ${toolName}`);
-        }
-        
-        return true; // Handled
-    }, [micControl, addSystemMessage]);
-
     // Process transcription events for voice keywords
     const processTranscriptionForKeywords = useCallback((text: string) => {
         if (text && text.length > 0) {
@@ -275,49 +196,11 @@ export const useVoiceChat = () => {
         }
     }, [voiceKeywords]);
 
-    // Enhanced event handler that processes voice control tools and keywords
+    // Enhanced event handler that processes voice keywords and passes events to chat handler
     const createEventHandler = useCallback((dataChannel: RTCDataChannel) => {
         return (data: string) => {
             try {
                 const event = JSON.parse(data) as VoiceChatEvent;
-
-                // Check for function call events (voice control tools)
-                // Handle client-side and DON'T pass to handleEvent (which would try to execute via Amplifier)
-                
-                // Intercept response.output_item.added/done for function calls
-                if (event.type === 'response.output_item.added' || event.type === 'response.output_item.done') {
-                    const itemEvent = event as { item?: { type?: string; name?: string; call_id?: string } };
-                    if (itemEvent.item?.type === 'function_call' && itemEvent.item?.name && CLIENT_SIDE_TOOLS.has(itemEvent.item.name)) {
-                        if (event.type === 'response.output_item.added') {
-                            // Execute the client-side tool when the item is added
-                            handleVoiceControlTool(itemEvent.item.name, itemEvent.item.call_id || '', dataChannel);
-                        }
-                        // Skip passing to handleEvent - we handled it client-side
-                        return;
-                    }
-                }
-                
-                // ALSO intercept response.function_call_arguments.done - this is what triggers executeToolCall
-                if (event.type === 'response.function_call_arguments.done') {
-                    const fnEvent = event as { name?: string; call_id?: string };
-                    if (fnEvent.name && CLIENT_SIDE_TOOLS.has(fnEvent.name)) {
-                        // Skip - already handled via response.output_item.added
-                        return;
-                    }
-                }
-
-                // Check for response.done - if we have a pending tool ack, trigger response.create
-                if (event.type === 'response.done' && pendingToolAckRef.current) {
-                    pendingToolAckRef.current = false;
-                    console.log('[VoiceChat] Response done with pending tool ack - triggering response');
-                    // Small delay to ensure the response is fully complete
-                    setTimeout(() => {
-                        if (dataChannel.readyState === 'open') {
-                            dataChannel.send(JSON.stringify({ type: 'response.create' }));
-                            console.log('[VoiceChat] Triggered response for tool acknowledgment');
-                        }
-                    }, 50);
-                }
 
                 // Check for transcription events (for keyword detection)
                 if (event.type === 'conversation.item.input_audio_transcription.completed') {
@@ -327,13 +210,13 @@ export const useVoiceChat = () => {
                     }
                 }
 
-                // Pass all other events to the regular handler
+                // Pass all events to the regular handler
                 handleEvent(event, dataChannel);
             } catch (err) {
                 console.debug('Error parsing event:', err);
             }
         };
-    }, [handleEvent, handleVoiceControlTool, processTranscriptionForKeywords]);
+    }, [handleEvent, processTranscriptionForKeywords]);
 
     const startVoiceChat = async () => {
         try {

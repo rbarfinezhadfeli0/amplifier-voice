@@ -4,21 +4,14 @@
  * Handles:
  * - User transcription messages
  * - Assistant response streaming
- * - Tool execution via Amplifier
  * - Voice event processing
+ * (Tool execution is handled server-side through the sideband WebSocket)
  */
 
 import { useRef, useState, useCallback } from 'react';
 import { Message } from '../models/Message';
 import { VoiceChatEvent, VoiceChatEventType } from '../models/VoiceChatEvent';
-import { ToolCall, AmplifierToolResult } from '../models/ToolCall';
 import { useTranscriptStore } from '../stores/transcriptStore';
-
-const BASE_URL = 'http://127.0.0.1:8080';
-
-// Track consecutive server failures to reduce console noise
-let consecutiveServerErrors = 0;
-const LOG_EVERY_N_ERRORS = 5; // Only log every 5th error to reduce noise
 
 // Tool name to friendly display name
 const getFriendlyToolName = (toolName: string, toolArgs?: Record<string, unknown> | string): string => {
@@ -83,7 +76,6 @@ export const useChatMessages = (options: UseChatMessagesOptions = {}) => {
     const [messages, setMessages] = useState<Message[]>([]);
     const activeUserMessageRef = useRef<string | null>(null);
     const activeAssistantMessageRef = useRef<Message | null>(null);
-    const activeToolCallRef = useRef<ToolCall | null>(null);
     const dataChannelRef = useRef<RTCDataChannel | null>(null);
     
     // Async tool result handling - track response state and queue late-arriving results
@@ -146,144 +138,6 @@ export const useChatMessages = (options: UseChatMessagesOptions = {}) => {
             }
         });
         responseInProgressRef.current = true;
-    }, [sendToAssistant]);
-
-    const executeToolCall = useCallback(async (toolCall: ToolCall) => {
-        console.log('Executing tool via Amplifier:', toolCall.name);
-
-        // Show executing status - use toolCall.id to uniquely identify this specific call
-        const statusMessage: Message = {
-            sender: 'system',
-            text: `Delegating to ${getFriendlyToolName(toolCall.name, toolCall.arguments)}...`,
-            timestamp: Date.now(),
-            isSystem: true,
-            type: 'tool_status',
-            toolName: toolCall.name,
-            toolCallId: toolCall.id,  // Unique ID to distinguish multiple calls to same tool
-            toolStatus: 'executing'
-        };
-        setMessages(prev => [...prev, statusMessage]);
-
-        try {
-            const response = await fetch(`${BASE_URL}/execute/${toolCall.name}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(toolCall.arguments),
-            });
-
-            if (!response.ok) {
-                throw new Error(`Tool execution failed: ${response.statusText}`);
-            }
-
-            const result = await response.json() as AmplifierToolResult;
-            
-            // Reset error counter on successful call
-            if (consecutiveServerErrors > 0) {
-                console.log('[ChatMessages] Server connection restored');
-                consecutiveServerErrors = 0;
-            }
-
-            // Update status message - match by toolCallId to only update THIS specific call
-            setMessages(prev => prev.map(msg =>
-                msg.type === 'tool_status' && msg.toolCallId === toolCall.id && msg.toolStatus === 'executing'
-                    ? {
-                        ...msg,
-                        text: result.success
-                            ? `Completed ${getFriendlyToolName(toolCall.name, toolCall.arguments)}`
-                            : `Error with ${getFriendlyToolName(toolCall.name, toolCall.arguments)}`,
-                        toolStatus: result.success ? 'completed' : 'error',
-                        isError: !result.success
-                    }
-                    : msg
-            ));
-
-            // Format output for assistant
-            const output = result.success
-                ? (typeof result.output === 'string' ? result.output : JSON.stringify(result.output))
-                : JSON.stringify({ error: result.error || 'Unknown error' });
-
-            // Send result to assistant - always inject the result into conversation
-            sendToAssistant({
-                type: 'conversation.item.create',
-                item: {
-                    type: 'function_call_output',
-                    call_id: toolCall.id,
-                    output
-                }
-            });
-
-            // Trigger response OR queue for later announcement
-            // This handles the case where a tool result arrives while the model is speaking
-            if (!responseInProgressRef.current) {
-                // No active response - trigger immediately
-                console.log(`[ChatMessages] Triggering response for ${toolCall.name} (no response in progress)`);
-                sendToAssistant({
-                    type: 'response.create'
-                });
-                responseInProgressRef.current = true;
-            } else {
-                // Response in progress - queue this for announcement after response.done
-                console.log(`[ChatMessages] Queueing ${toolCall.name} result - model busy speaking`);
-                pendingToolAnnouncementsRef.current.push({ 
-                    toolName: getFriendlyToolName(toolCall.name, toolCall.arguments), 
-                    callId: toolCall.id 
-                });
-            }
-
-            return result;
-
-        } catch (err) {
-            const error = err instanceof Error ? err.message : 'Unknown error';
-            const isServerError = error.includes('Failed to fetch') || 
-                                  error.includes('NetworkError') ||
-                                  error.includes('fetch');
-            
-            if (isServerError) {
-                consecutiveServerErrors++;
-                // Only log periodically when server is down to avoid console flood
-                if (consecutiveServerErrors === 1) {
-                    console.warn('[ChatMessages] Server unreachable - tool calls will fail');
-                } else if (consecutiveServerErrors % LOG_EVERY_N_ERRORS === 0) {
-                    console.warn(`[ChatMessages] Server still unreachable (${consecutiveServerErrors} failed calls)`);
-                }
-            } else {
-                // Non-server errors always get logged
-                consecutiveServerErrors = 0;
-                console.error('Tool execution error:', error);
-            }
-
-            // Update status to error - match by toolCallId to only update THIS specific call
-            setMessages(prev => prev.map(msg =>
-                msg.type === 'tool_status' && msg.toolCallId === toolCall.id && msg.toolStatus === 'executing'
-                    ? { ...msg, text: `Error: ${error}`, toolStatus: 'error', isError: true }
-                    : msg
-            ));
-
-            // Send error to assistant
-            sendToAssistant({
-                type: 'conversation.item.create',
-                item: {
-                    type: 'function_call_output',
-                    call_id: toolCall.id,
-                    output: JSON.stringify({ error })
-                }
-            });
-
-            // Trigger response OR queue (same logic as success path)
-            if (!responseInProgressRef.current) {
-                sendToAssistant({
-                    type: 'response.create'
-                });
-                responseInProgressRef.current = true;
-            } else {
-                pendingToolAnnouncementsRef.current.push({ 
-                    toolName: getFriendlyToolName(toolCall.name, toolCall.arguments), 
-                    callId: toolCall.id 
-                });
-            }
-
-            throw err;
-        }
     }, [sendToAssistant]);
 
     const handleEvent = useCallback(async (event: VoiceChatEvent, rtcDataChannel?: RTCDataChannel) => {
@@ -371,71 +225,6 @@ export const useChatMessages = (options: UseChatMessagesOptions = {}) => {
                     } else if (!autoRespondAllowed) {
                         console.log('[ChatMessages] Auto-respond blocked (muted or replies paused)');
                     }
-                }
-                break;
-
-            // Tool call events
-            case VoiceChatEventType.FUNCTION_CALL:
-                if (event.delta && event.call_id) {
-                    if (!activeToolCallRef.current) {
-                        activeToolCallRef.current = {
-                            id: event.call_id,
-                            name: event.name || '',
-                            arguments: {},
-                            status: 'pending'
-                        };
-                    }
-                    try {
-                        const partial = JSON.parse(event.delta);
-                        activeToolCallRef.current.arguments = {
-                            ...activeToolCallRef.current.arguments,
-                            ...partial
-                        };
-                    } catch {
-                        // Ignore partial JSON
-                    }
-                }
-                break;
-
-            case VoiceChatEventType.FUNCTION_CALL_DONE:
-                if (event.call_id && event.name) {
-                    try {
-                        const toolArgs = event.arguments ? JSON.parse(event.arguments) : {};
-                        const toolCall: ToolCall = {
-                            id: event.call_id,
-                            name: event.name,
-                            arguments: toolArgs,
-                            status: 'pending'
-                        };
-                        
-                        // Capture tool call to transcript
-                        addTranscriptEntry({
-                            entry_type: 'tool_call',
-                            tool_name: event.name,
-                            tool_call_id: event.call_id,
-                            tool_arguments: toolArgs,
-                        });
-                        
-                        const result = await executeToolCall(toolCall);
-                        
-                        // Capture tool result to transcript
-                        addTranscriptEntry({
-                            entry_type: 'tool_result',
-                            tool_name: event.name,
-                            tool_call_id: event.call_id,
-                            tool_result: result as unknown as Record<string, unknown>,
-                        });
-                    } catch (error) {
-                        console.error('Tool execution failed:', error);
-                        // Capture error to transcript
-                        addTranscriptEntry({
-                            entry_type: 'tool_result',
-                            tool_name: event.name,
-                            tool_call_id: event.call_id,
-                            tool_result: { error: error instanceof Error ? error.message : 'Unknown error' },
-                        });
-                    }
-                    activeToolCallRef.current = null;
                 }
                 break;
 
@@ -565,13 +354,12 @@ export const useChatMessages = (options: UseChatMessagesOptions = {}) => {
                 }
                 break;
         }
-    }, [executeToolCall]);
+    }, [flushPendingAnnouncements, addTranscriptEntry, shouldAutoRespond]);
 
     const clearMessages = useCallback(() => {
         setMessages([]);
         activeUserMessageRef.current = null;
         activeAssistantMessageRef.current = null;
-        activeToolCallRef.current = null;
     }, []);
 
     // Add a system message (for visual indicators like pause/resume)
