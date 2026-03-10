@@ -93,7 +93,7 @@ class VoiceSideband:
     # ------------------------------------------------------------------
 
     async def _handle_tool_call(self, event: dict) -> None:
-        """Execute a tool call via the bridge and inject the result back."""
+        """Route an incoming tool-call event to the appropriate handler."""
         tool_name = event.get("name", "")
         call_id = event.get("call_id", "")
         raw_args = event.get("arguments", "{}")
@@ -105,15 +105,87 @@ class VoiceSideband:
 
         logger.info("Sideband tool call: %s (call_id=%s)", tool_name, call_id)
 
-        result = await self._bridge.execute_tool(tool_name, arguments)
+        if tool_name == "dispatch":
+            await self._handle_dispatch(call_id, arguments)
+        elif tool_name == "cancel_current_task":
+            await self._handle_cancel(call_id, arguments)
+        else:
+            await self._handle_delegate(call_id, tool_name, arguments)
 
-        # Build the output string
+    async def _handle_delegate(self, call_id: str, name: str, arguments: dict) -> None:
+        """Execute a tool call synchronously (serialised) and inject the result."""
+        async with execution_lock:
+            result = await self._bridge.execute_tool(name, arguments)
+
         if hasattr(result, "to_dict"):
             output = json.dumps(result.to_dict())
         else:
             output = json.dumps(result)
 
-        # Send result back into the Realtime session
+        item_create = {
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": output,
+            },
+        }
+        response_create = {
+            "type": "response.create",
+            "response": {
+                "instructions": "Process the tool result and respond to the user.",
+            },
+        }
+
+        await self._ws.send(json.dumps(item_create))
+        await self._ws.send(json.dumps(response_create))
+
+    async def _handle_dispatch(self, call_id: str, arguments: dict) -> None:
+        """Send an immediate synthetic ack and spawn a background agent job."""
+        agent = arguments.get("agent", "unknown")
+        instruction = arguments.get("instruction", "")
+
+        ack_output = f"Dispatched to {agent}. You'll be notified when complete."
+        item_create = {
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": ack_output,
+            },
+        }
+        response_create = {
+            "type": "response.create",
+            "response": {
+                "instructions": (
+                    "Acknowledge that the task has been dispatched and is running "
+                    "in the background."
+                ),
+            },
+        }
+
+        await self._ws.send(json.dumps(item_create))
+        await self._ws.send(json.dumps(response_create))
+
+        asyncio.create_task(
+            run_agent_job(
+                sideband=self,
+                call_id=call_id,
+                agent=agent,
+                instruction=instruction,
+                bridge=self._bridge,
+            )
+        )
+
+    async def _handle_cancel(self, call_id: str, arguments: dict) -> None:
+        """Route a cancel_current_task call through the bridge."""
+        result = await self._bridge.execute_tool("cancel_current_task", arguments)
+
+        if hasattr(result, "to_dict"):
+            output = json.dumps(result.to_dict())
+        else:
+            output = json.dumps(result)
+
         item_create = {
             "type": "conversation.item.create",
             "item": {

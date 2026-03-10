@@ -218,6 +218,73 @@ class TestVoiceSidebandSendSessionUpdate:
         assert msg["session"] == session_config
 
 
+class TestVoiceSidebandDispatchRouting:
+    """Dispatch tool calls return a synthetic ack and spawn a background task."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_returns_synthetic_ack_and_spawns_task(self):
+        dispatch_event = {
+            "type": TOOL_CALL_EVENT,
+            "call_id": "tool_call_dispatch_1",
+            "name": "dispatch",
+            "arguments": json.dumps(
+                {"agent": "code-reviewer", "instruction": "Review the PR"}
+            ),
+        }
+
+        sb, bridge, fake_ws = make_sideband(messages=[json.dumps(dispatch_event)])
+        bridge.execute_tool.return_value = {"status": "completed"}
+
+        mock_connect_cm = AsyncMock()
+        mock_connect_cm.__aenter__ = AsyncMock(return_value=fake_ws)
+        mock_connect_cm.__aexit__ = AsyncMock(return_value=False)
+
+        created_tasks: list[asyncio.Task] = []
+        real_create_task = asyncio.create_task
+
+        def spy_create_task(coro, **kwargs):
+            task = real_create_task(coro, **kwargs)
+            created_tasks.append(task)
+            return task
+
+        with patch("asyncio.create_task", side_effect=spy_create_task):
+            with patch(
+                "voice_server.sideband.websockets.connect",
+                return_value=mock_connect_cm,
+            ):
+                await sb.connect()
+
+            # Give the listen loop time to process the dispatch event
+            await asyncio.sleep(0.1)
+
+        # Synthetic ack (conversation.item.create + response.create) must be sent
+        sent_messages = [json.loads(m) for m in fake_ws.sent]
+        types = [m["type"] for m in sent_messages]
+        assert "conversation.item.create" in types
+        assert "response.create" in types
+
+        # Ack output must mention "Dispatched to code-reviewer"
+        item_msg = next(
+            m for m in sent_messages if m["type"] == "conversation.item.create"
+        )
+        assert "Dispatched" in item_msg["item"]["output"]
+        assert "code-reviewer" in item_msg["item"]["output"]
+
+        # asyncio.create_task must have been called at least twice:
+        #   1. for the listen loop (inside connect())
+        #   2. for the background dispatch job
+        assert len(created_tasks) >= 2
+
+        # Clean up background tasks
+        for task in created_tasks:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        await sb.disconnect()
+
+
 class TestVoiceSidebandDisconnect:
     """disconnect cleans up state."""
 
