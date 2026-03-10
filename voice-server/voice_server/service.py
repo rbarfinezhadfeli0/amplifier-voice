@@ -36,6 +36,9 @@ _amplifier_bridge: Optional[AmplifierBridge] = None
 # Transcript repository instance
 _transcript_repo: Optional[TranscriptRepository] = None
 
+# Sideband registry: maps call_id -> VoiceSideband instance
+_sideband_registry: Dict[str, Any] = {}
+
 
 class FastAPILifespan:
     """Manages FastAPI application lifespan with multiple handlers."""
@@ -163,6 +166,74 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
             "model": settings.realtime.model,
         }
 
+    # ============ Sideband Endpoints ============
+
+    @app.post("/voice/sideband")
+    async def connect_sideband(request: Request) -> Dict[str, Any]:
+        """
+        Connect a server-side sideband WebSocket to an active Realtime call.
+
+        Body:
+        - call_id: str — call ID returned by the /sdp X-Call-Id header
+        - ephemeral_key: str — ephemeral auth key from /session
+
+        Returns connection status.
+        """
+        # Imported here to avoid circular imports
+        from .sideband import VoiceSideband
+
+        body = await request.json()
+        call_id: Optional[str] = body.get("call_id")
+        ephemeral_key: Optional[str] = body.get("ephemeral_key")
+
+        if not call_id or not ephemeral_key:
+            raise HTTPException(
+                status_code=400, detail="call_id and ephemeral_key are required"
+            )
+
+        if not _amplifier_bridge:
+            raise HTTPException(
+                status_code=503, detail="Amplifier bridge not initialized"
+            )
+
+        # Return early if already connected
+        existing = _sideband_registry.get(call_id)
+        if existing is not None and existing.is_connected:
+            return {"status": "already_connected", "call_id": call_id}
+
+        sideband = VoiceSideband(
+            bridge=_amplifier_bridge, api_key=ephemeral_key, call_id=call_id
+        )
+        await sideband.connect()
+
+        if not sideband.is_connected:
+            raise HTTPException(status_code=502, detail="Sideband failed to connect")
+
+        _sideband_registry[call_id] = sideband
+        logger.info("Sideband registered for call_id=%s", call_id)
+        return {"status": "connected", "call_id": call_id}
+
+    @app.post("/voice/end")
+    async def end_call(request: Request) -> Dict[str, Any]:
+        """
+        Disconnect and remove the sideband for a completed call.
+
+        Body:
+        - call_id: str — call ID to end
+
+        Returns disconnection status.
+        """
+        body = await request.json()
+        call_id: Optional[str] = body.get("call_id")
+
+        sideband = _sideband_registry.pop(call_id, None) if call_id else None
+        if sideband is None:
+            return {"status": "not_found"}
+
+        await sideband.disconnect()
+        logger.info("Sideband disconnected for call_id=%s", call_id)
+        return {"status": "disconnected"}
+
     # ============ Cancellation Endpoint ============
 
     @app.post("/cancel")
@@ -257,6 +328,9 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
                 status_code=503, detail="Amplifier bridge not initialized"
             )
 
+        # Capture non-None reference for use inside the generator closure
+        bridge = _amplifier_bridge
+
         async def generate_events():
             """Generator that yields SSE-formatted events from the queue."""
             logger.info("[SSE] Client connected to event stream")
@@ -271,7 +345,7 @@ def service_init(app: FastAPI, register_lifespan_handler: Callable):
                     try:
                         # Wait for event with timeout to check for disconnect
                         event = await asyncio.wait_for(
-                            _amplifier_bridge.event_queue.get(),
+                            bridge.event_queue.get(),
                             timeout=30.0,  # Send keepalive every 30s
                         )
 
