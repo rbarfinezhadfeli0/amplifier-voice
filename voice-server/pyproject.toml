@@ -10,6 +10,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "python-multipart>=0.0.20",
     "uvicorn>=0.34.0",
+    "websockets>=13.0",
     # Amplifier ecosystem (foundation transitively includes core)
     # Module dependencies are installed automatically by ModuleActivator
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
@@ -20,6 +21,13 @@ dependencies = [
 
 [project.scripts]
 voice-server = "voice_server.start:main"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "websockets>=13.0",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
