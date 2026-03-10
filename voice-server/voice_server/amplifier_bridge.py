@@ -390,6 +390,7 @@ class AmplifierBridge:
             provider_preferences: Optional[List[Any]] = None,
             parent_messages: Optional[List[Dict[str, Any]]] = None,
             self_delegation_depth: int = 0,
+            **kwargs: Any,
         ) -> Dict[str, Any]:
             """Spawn sub-session for agent delegation with cancellation propagation.
 
