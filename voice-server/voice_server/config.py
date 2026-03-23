@@ -13,7 +13,10 @@ assistant_name = os.environ.get("ASSISTANT_NAME", "Amplifier")
 # Amplifier configuration from environment
 # Use amplifier-dev bundle which includes the delegate tool
 # The delegate tool provides enhanced context control and session resumption
-amplifier_bundle = os.environ.get("AMPLIFIER_BUNDLE", "amplifier-dev")
+amplifier_bundle = os.environ.get(
+    "AMPLIFIER_BUNDLE",
+    "git+https://github.com/microsoft/amplifier-foundation@main",
+)
 # Default to current working directory - users typically run from their project folder
 amplifier_cwd = os.environ.get("AMPLIFIER_CWD", os.getcwd())
 amplifier_auto_approve = (

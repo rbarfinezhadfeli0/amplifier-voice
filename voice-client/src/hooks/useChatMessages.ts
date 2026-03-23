@@ -367,7 +367,7 @@ export const useChatMessages = (options: UseChatMessagesOptions = {}) => {
         const message: Message = {
             sender: 'system',
             text: icon ? `${icon} ${text}` : text,
-            timestamp: new Date().toISOString(),
+            timestamp: Date.now(),
         };
         setMessages(prev => [...prev, message]);
     }, []);
