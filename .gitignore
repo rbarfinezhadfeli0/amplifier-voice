@@ -1,2 +1,21 @@
 .DS_Store
 
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json
+
+# Workspace hygiene (auto-added 2026-05-11 cascade)
+my_projects/
+.codex/
+.~lock.*
+**/* (copy*)*
+**/* copy*
+**/make_error.log
+**/make.log
+__pycache__/
+*.pyc
+build_x86/
+build_x86_lat/
+*.zip
+

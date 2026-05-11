@@ -1,0 +1,160 @@
+# =====================================================================
+# .mempalaceignore — patterns excluded from MemPalace mining ONLY
+# (NOT applied to git; merged into a temp .gitignore during `mempalace mine`)
+# Syntax: gitignore-style globs.
+# =====================================================================
+
+# --- bulk data formats (user-requested) ---
+*.csv
+*.tsv
+*.dbn
+*.dbn.zst
+*.dbn.gz
+*.parquet
+*.feather
+*.arrow
+
+# --- excel / office ---
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+*.ods
+*.doc
+*.docx
+*.ppt
+*.pptx
+
+# --- compressed archives ---
+*.zip
+*.tar
+*.tar.gz
+*.tar.zst
+*.tar.bz2
+*.tgz
+*.7z
+*.rar
+*.zst
+*.gz
+*.bz2
+*.xz
+
+# --- binaries / build artifacts ---
+*.o
+*.obj
+*.so
+*.so.*
+*.a
+*.dll
+*.dylib
+*.exe
+*.bin
+*.elf
+*.wasm
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.class
+*.jar
+*.war
+
+# --- FPGA / EDA artifacts (large + binary) ---
+*.xclbin
+*.xo
+*.bit
+*.dcp
+*.ltx
+*.mcs
+*.jou
+*.log
+*.pb
+*.wcfg
+*.wdb
+*.vcd
+*.fsdb
+*.shm
+*.daidir/
+*.db
+*.dir/
+xsim.dir/
+*.backup.log
+*.backup.jou
+
+# --- ML/AI weights & checkpoints ---
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.pb
+*.h5
+*.npz
+*.npy
+*.tfrecord
+
+# --- media (rarely useful as searchable text) ---
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+*.mp3
+*.wav
+*.flac
+*.ogg
+*.aac
+*.m4a
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.webp
+*.psd
+*.ai
+*.svg
+
+# --- caches & venvs ---
+.venv/
+venv/
+.mempalace-venv/
+node_modules/
+.tox/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# --- workspace data dirs ---
+.data/
+data/
+logs/
+log/
+.logs/
+tmp/
+.tmp/
+
+# --- editor / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- git internals (we mine source, not git plumbing) ---
+.git/
+.gitmodules
+
+# --- mempalace itself ---
+.mempalace/
+mempalace.yaml
+
+# --- size cap >95MB enforced dynamically ---
+# (the menu script appends explicit paths from `find -size +95M` to the overlay)
