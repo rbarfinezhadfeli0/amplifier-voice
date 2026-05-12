@@ -1,21 +1,43 @@
-.DS_Store
+# Private settings
+**/certs/*.pem
+**/certs/config.json
+**/certs/mkcert
+*.local
+*.user
+*__local__*
+appsettings.*.json
+**/.DS_Store
+
+# Dependencies and build cache
+node_modules
+__pycache__
+.pytest_cache
+.ruff_cache
+.cache
+*.egg-info
+
+obj
+dist
 
 
-# MemPalace per-project files (issue #185)
-mempalace.yaml
-entities.json
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# Workspace hygiene (auto-added 2026-05-11 cascade)
-my_projects/
-.codex/
-.~lock.*
-**/* (copy*)*
-**/* copy*
-**/make_error.log
-**/make.log
-__pycache__/
-*.pyc
-build_x86/
-build_x86_lat/
-*.zip
+#azd files
+.azure
+azure.yaml
+next-steps.md
+
+
+
+# Ignore Windows Alternate Data Streams (ADS) files that may appear in WSL
+**/*Zone.Identifier
+**/*:Zone.Identifier
+**/*sec.endpointdlp
+**/*:sec.endpointdlp
 
